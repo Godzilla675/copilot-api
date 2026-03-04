@@ -40,6 +40,7 @@ export function translateToOpenAI(
     stream: payload.stream,
     temperature: payload.temperature,
     top_p: payload.top_p,
+    thinking: payload.thinking,
     user: payload.metadata?.user_id,
     tools: translateAnthropicToolsToOpenAI(payload.tools),
     tool_choice: translateAnthropicToolChoiceToOpenAI(payload.tool_choice),
@@ -48,9 +49,15 @@ export function translateToOpenAI(
 
 function translateModelName(model: string): string {
   // Subagent requests use a specific model number which Copilot doesn't support
-  if (model.startsWith("claude-sonnet-4-")) {
+  if (
+    model.startsWith("claude-sonnet-4-")
+    && !model.startsWith("claude-sonnet-4.6")
+  ) {
     return model.replace(/^claude-sonnet-4-.*/, "claude-sonnet-4")
-  } else if (model.startsWith("claude-opus-")) {
+  } else if (
+    model.startsWith("claude-opus-4-")
+    && !model.startsWith("claude-opus-4.6")
+  ) {
     return model.replace(/^claude-opus-4-.*/, "claude-opus-4")
   }
   return model

@@ -4,6 +4,10 @@ import consola from "consola"
 import { streamSSE, type SSEMessage } from "hono/streaming"
 
 import { awaitApproval } from "~/lib/approval"
+import {
+  isCodexResponsesModel,
+  parseModelNameWithLevel,
+} from "~/lib/model-level"
 import { checkRateLimit } from "~/lib/rate-limit"
 import { state } from "~/lib/state"
 import { getTokenCount } from "~/lib/tokenizer"
@@ -12,17 +16,29 @@ import {
   createChatCompletions,
   type ChatCompletionResponse,
   type ChatCompletionsPayload,
+  normalizeChatCompletionsPayloadModel,
 } from "~/services/copilot/create-chat-completions"
+import {
+  createResponses,
+  type ResponsesApiResponse,
+} from "~/services/copilot/create-responses"
+
+import {
+  translateChatCompletionsToResponses,
+  translateResponsesStreamToChatStream,
+  translateResponsesToChatCompletions,
+} from "./responses-translation"
 
 export async function handleCompletion(c: Context) {
   await checkRateLimit(state)
 
   let payload = await c.req.json<ChatCompletionsPayload>()
+  const { baseModel } = parseModelNameWithLevel(payload.model)
   consola.debug("Request payload:", JSON.stringify(payload).slice(-400))
 
   // Find the selected model
   const selectedModel = state.models?.data.find(
-    (model) => model.id === payload.model,
+    (model) => model.id === baseModel,
   )
 
   // Calculate and display token count
@@ -47,7 +63,33 @@ export async function handleCompletion(c: Context) {
     consola.debug("Set max_tokens to:", JSON.stringify(payload.max_tokens))
   }
 
-  const response = await createChatCompletions(payload)
+  const normalizedPayload = normalizeChatCompletionsPayloadModel(payload)
+
+  if (isCodexResponsesModel(baseModel)) {
+    const responsesPayload =
+      translateChatCompletionsToResponses(normalizedPayload)
+    const responses = await createResponses(responsesPayload)
+
+    if (isNonStreamingResponse(responses)) {
+      const completionResponse = translateResponsesToChatCompletions(responses)
+      consola.debug(
+        "Codex translated response:",
+        JSON.stringify(completionResponse).slice(-400),
+      )
+      return c.json(completionResponse)
+    }
+
+    return streamSSE(c, async (stream) => {
+      for await (const chunk of translateResponsesStreamToChatStream(
+        responses,
+        normalizedPayload.model,
+      )) {
+        await stream.writeSSE(chunk)
+      }
+    })
+  }
+
+  const response = await createChatCompletions(normalizedPayload)
 
   if (isNonStreaming(response)) {
     consola.debug("Non-streaming response:", JSON.stringify(response))
@@ -62,6 +104,10 @@ export async function handleCompletion(c: Context) {
     }
   })
 }
+
+const isNonStreamingResponse = (
+  response: Awaited<ReturnType<typeof createResponses>>,
+): response is ResponsesApiResponse => !(Symbol.asyncIterator in response)
 
 const isNonStreaming = (
   response: Awaited<ReturnType<typeof createChatCompletions>>,
