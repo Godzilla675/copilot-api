@@ -1,9 +1,11 @@
 import { test, expect, mock } from "bun:test"
 
 import type { ChatCompletionsPayload } from "../src/services/copilot/create-chat-completions"
+import type { ResponsesPayload } from "../src/services/copilot/create-responses"
 
 import { state } from "../src/lib/state"
 import { createChatCompletions } from "../src/services/copilot/create-chat-completions"
+import { createResponses } from "../src/services/copilot/create-responses"
 
 // Mock state
 state.copilotToken = "test-token"
@@ -34,7 +36,7 @@ test("sets X-Initiator to agent if tool/assistant present", async () => {
   await createChatCompletions(payload)
   expect(fetchMock).toHaveBeenCalled()
   const headers = (
-    fetchMock.mock.calls[0][1] as { headers: Record<string, string> }
+    fetchMock.mock.calls.at(-1)?.[1] as { headers: Record<string, string> }
   ).headers
   expect(headers["X-Initiator"]).toBe("agent")
 })
@@ -50,7 +52,48 @@ test("sets X-Initiator to user if only user present", async () => {
   await createChatCompletions(payload)
   expect(fetchMock).toHaveBeenCalled()
   const headers = (
-    fetchMock.mock.calls[1][1] as { headers: Record<string, string> }
+    fetchMock.mock.calls.at(-1)?.[1] as { headers: Record<string, string> }
   ).headers
+  expect(headers["X-Initiator"]).toBe("user")
+})
+
+test("sets X-Initiator to agent for responses tool history", async () => {
+  const payload: ResponsesPayload = {
+    model: "gpt-5.4",
+    input: [
+      { role: "user", content: "hi" },
+      { role: "tool", content: '{"ok":true}', tool_call_id: "call_123" },
+    ],
+  }
+
+  await createResponses(payload)
+  const headers = (
+    fetchMock.mock.calls.at(-1)?.[1] as { headers: Record<string, string> }
+  ).headers
+  expect(headers["X-Initiator"]).toBe("agent")
+})
+
+test("enables vision header for responses image input", async () => {
+  const payload: ResponsesPayload = {
+    model: "gpt-5.4",
+    input: [
+      {
+        role: "user",
+        content: [
+          { type: "input_text", text: "describe this" },
+          {
+            type: "input_image",
+            image_url: "https://example.com/image.png",
+          },
+        ],
+      },
+    ],
+  }
+
+  await createResponses(payload)
+  const headers = (
+    fetchMock.mock.calls.at(-1)?.[1] as { headers: Record<string, string> }
+  ).headers
+  expect(headers["copilot-vision-request"]).toBe("true")
   expect(headers["X-Initiator"]).toBe("user")
 })

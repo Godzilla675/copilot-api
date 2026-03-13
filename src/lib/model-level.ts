@@ -2,8 +2,7 @@ export const MODEL_LEVELS = ["low", "medium", "high", "xhigh"] as const
 
 export type ModelLevel = (typeof MODEL_LEVELS)[number]
 
-export const MODEL_LEVEL_VARIANTS = {
-  "gpt-5.3-codex": MODEL_LEVELS,
+const CLAUDE_MODEL_LEVEL_VARIANTS = {
   "claude-opus-4.6": ["low", "medium", "high"],
   "claude-opus-4.6-fast": ["low", "medium", "high"],
   "claude-sonnet-4.6": ["low", "medium", "high"],
@@ -29,8 +28,23 @@ export const parseModelNameWithLevel = (
   }
 }
 
-export const isCodexResponsesModel = (model: string): boolean =>
-  model === "gpt-5.3-codex"
+export const isGptResponsesModel = (model: string): boolean =>
+  model.startsWith("gpt-")
+
+export const supportsGptReasoningEffort = (model: string): boolean =>
+  model.startsWith("gpt-5")
+
+export const getModelLevelsForModel = (
+  model: string,
+): ReadonlyArray<ModelLevel> | undefined => {
+  if (supportsGptReasoningEffort(model)) {
+    return MODEL_LEVELS
+  }
+
+  return CLAUDE_MODEL_LEVEL_VARIANTS[
+    model as keyof typeof CLAUDE_MODEL_LEVEL_VARIANTS
+  ]
+}
 
 export const isClaudeThinkingModel = (model: string): boolean =>
   model === "claude-opus-4.6"

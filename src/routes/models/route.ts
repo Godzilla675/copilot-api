@@ -3,7 +3,7 @@ import { Hono } from "hono"
 import type { Model } from "~/services/copilot/get-models"
 
 import { forwardError } from "~/lib/error"
-import { MODEL_LEVEL_VARIANTS } from "~/lib/model-level"
+import { getModelLevelsForModel } from "~/lib/model-level"
 import { state } from "~/lib/state"
 import { cacheModels } from "~/lib/utils"
 
@@ -31,10 +31,7 @@ modelRoutes.get("/", async (c) => {
 export function expandModelList(models: Array<Model>) {
   return models.flatMap((model) => {
     const expanded = [toModelItem(model, model.id)]
-    const levels =
-      model.id in MODEL_LEVEL_VARIANTS ?
-        MODEL_LEVEL_VARIANTS[model.id as keyof typeof MODEL_LEVEL_VARIANTS]
-      : undefined
+    const levels = getModelLevelsForModel(model.id)
     if (!levels) {
       return expanded
     }

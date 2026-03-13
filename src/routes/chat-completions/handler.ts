@@ -4,10 +4,7 @@ import consola from "consola"
 import { streamSSE, type SSEMessage } from "hono/streaming"
 
 import { awaitApproval } from "~/lib/approval"
-import {
-  isCodexResponsesModel,
-  parseModelNameWithLevel,
-} from "~/lib/model-level"
+import { isGptResponsesModel, parseModelNameWithLevel } from "~/lib/model-level"
 import { checkRateLimit } from "~/lib/rate-limit"
 import { state } from "~/lib/state"
 import { getTokenCount } from "~/lib/tokenizer"
@@ -65,7 +62,7 @@ export async function handleCompletion(c: Context) {
 
   const normalizedPayload = normalizeChatCompletionsPayloadModel(payload)
 
-  if (isCodexResponsesModel(baseModel)) {
+  if (isGptResponsesModel(baseModel)) {
     const responsesPayload =
       translateChatCompletionsToResponses(normalizedPayload)
     const responses = await createResponses(responsesPayload)
@@ -73,7 +70,7 @@ export async function handleCompletion(c: Context) {
     if (isNonStreamingResponse(responses)) {
       const completionResponse = translateResponsesToChatCompletions(responses)
       consola.debug(
-        "Codex translated response:",
+        "GPT translated response:",
         JSON.stringify(completionResponse).slice(-400),
       )
       return c.json(completionResponse)

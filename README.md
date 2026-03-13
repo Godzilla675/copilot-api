@@ -192,6 +192,8 @@ These endpoints mimic the OpenAI API structure.
 | `GET /v1/models`            | `GET`  | Lists the currently available models.                     |
 | `POST /v1/embeddings`       | `POST` | Creates an embedding vector representing the input text.  |
 
+For GPT-family models, `/v1/chat/completions` is a compatibility layer. If you need native Responses features and the best chance of preserving model-specific reasoning metadata, prefer `POST /v1/responses`.
+
 ### Anthropic Compatible Endpoints
 
 These endpoints are designed to be compatible with the Anthropic Messages API.

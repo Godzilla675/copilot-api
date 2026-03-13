@@ -1,13 +1,16 @@
 import { describe, expect, test } from "bun:test"
 
+import type { ChatCompletionChunk } from "~/services/copilot/create-chat-completions"
+import type { ResponseInputMessage } from "~/services/copilot/create-responses"
 import type { Model } from "~/services/copilot/get-models"
 
 import {
-  MODEL_LEVEL_VARIANTS,
+  getModelLevelsForModel,
   parseModelNameWithLevel,
 } from "~/lib/model-level"
 import {
   translateChatCompletionsToResponses,
+  translateResponsesStreamToChatStream,
   translateResponsesToChatCompletions,
 } from "~/routes/chat-completions/responses-translation"
 import { expandModelList } from "~/routes/models/route"
@@ -28,13 +31,13 @@ describe("model(level) parsing and mapping", () => {
     })
   })
 
-  test("maps codex suffix level to reasoning_effort", () => {
+  test("maps GPT-5.4 suffix level to reasoning_effort", () => {
     const payload = normalizeChatCompletionsPayloadModel({
-      model: "gpt-5.3-codex(xhigh)",
+      model: "gpt-5.4(xhigh)",
       messages: [{ role: "user", content: "hi" }],
     })
 
-    expect(payload.model).toBe("gpt-5.3-codex")
+    expect(payload.model).toBe("gpt-5.4")
     expect(payload.reasoning_effort).toBe("xhigh")
   })
 
@@ -58,14 +61,14 @@ describe("model(level) parsing and mapping", () => {
 describe("chat/responses translation", () => {
   test("translates chat payload to responses payload", () => {
     const translated = translateChatCompletionsToResponses({
-      model: "gpt-5.3-codex",
+      model: "gpt-5.4",
       messages: [{ role: "user", content: "Hello" }],
       max_tokens: 128,
       reasoning_effort: "medium",
     })
 
     expect(translated).toMatchObject({
-      model: "gpt-5.3-codex",
+      model: "gpt-5.4",
       input: [{ role: "user", content: "Hello" }],
       max_output_tokens: 128,
       reasoning_effort: "medium",
@@ -97,11 +100,171 @@ describe("chat/responses translation", () => {
       total_tokens: 6,
     })
   })
+
+  test("preserves tool metadata when translating chat payload", () => {
+    const translated = translateChatCompletionsToResponses({
+      model: "gpt-5.4",
+      messages: [
+        {
+          role: "assistant",
+          content: null,
+          name: "planner",
+          tool_calls: [
+            {
+              id: "call_123",
+              type: "function",
+              function: {
+                name: "get_weather",
+                arguments: '{"city":"Boston"}',
+              },
+            },
+          ],
+        },
+        {
+          role: "tool",
+          content: '{"temperature":72}',
+          tool_call_id: "call_123",
+        },
+      ],
+    })
+
+    expect(Array.isArray(translated.input)).toBe(true)
+    if (!Array.isArray(translated.input)) {
+      throw new TypeError(
+        "Expected translated input to be an array of messages",
+      )
+    }
+    const input: Array<ResponseInputMessage> = translated.input
+    expect(input[0]).toMatchObject({
+      role: "assistant",
+      content: "",
+      name: "planner",
+      tool_calls: [
+        {
+          id: "call_123",
+          type: "function",
+          function: {
+            name: "get_weather",
+            arguments: '{"city":"Boston"}',
+          },
+        },
+      ],
+    })
+    expect(input[1]).toMatchObject({
+      role: "tool",
+      content: '{"temperature":72}',
+      tool_call_id: "call_123",
+    })
+  })
+
+  test("translates text streaming events back to chat chunks", async () => {
+    const translated = await collectStreamChunks(
+      translateResponsesStreamToChatStream(
+        asResponseStream([
+          {
+            type: "response.output_item.added",
+            output_index: 0,
+            item: {
+              id: "msg_123",
+              type: "message",
+              status: "in_progress",
+              role: "assistant",
+              content: [],
+            },
+          },
+          {
+            type: "response.output_text.delta",
+            item_id: "msg_123",
+            output_index: 0,
+            content_index: 0,
+            delta: "Hello",
+          },
+          {
+            type: "response.completed",
+            response: {
+              id: "resp_123",
+              object: "response",
+              model: "gpt-5.4",
+            },
+          },
+        ]),
+        "gpt-5.4",
+      ),
+    )
+
+    expect(translated[0]?.choices[0]?.delta).toEqual({
+      role: "assistant",
+      content: "Hello",
+    })
+    expect(translated[1]?.choices[0]?.finish_reason).toBe("stop")
+  })
+
+  test("translates streamed function call events back to chat chunks", async () => {
+    const translated = await collectStreamChunks(
+      translateResponsesStreamToChatStream(
+        asResponseStream([
+          {
+            type: "response.output_item.added",
+            output_index: 0,
+            item: {
+              id: "fc_123",
+              type: "function_call",
+              call_id: "call_123",
+              name: "get_weather",
+            },
+          },
+          {
+            type: "response.function_call_arguments.delta",
+            item_id: "fc_123",
+            output_index: 0,
+            call_id: "call_123",
+            delta: '{"location":"San"',
+          },
+          {
+            type: "response.completed",
+            response: {
+              id: "resp_123",
+              object: "response",
+              model: "gpt-5.4",
+            },
+          },
+        ]),
+        "gpt-5.4",
+      ),
+    )
+
+    expect(translated[0]?.choices[0]?.delta).toEqual({
+      role: "assistant",
+      tool_calls: [
+        {
+          index: 0,
+          id: "call_123",
+          type: "function",
+          function: {
+            name: "get_weather",
+            arguments: "",
+          },
+        },
+      ],
+    })
+    expect(translated[1]?.choices[0]?.delta).toEqual({
+      tool_calls: [
+        {
+          index: 0,
+          function: {
+            arguments: '{"location":"San"',
+          },
+        },
+      ],
+    })
+    expect(translated[2]?.choices[0]?.finish_reason).toBe("tool_calls")
+  })
 })
 
 describe("model listing expansion", () => {
   test("includes required level-suffixed variants", () => {
     const models = expandModelList([
+      makeModel("gpt-5.4"),
       makeModel("gpt-5.3-codex"),
       makeModel("claude-opus-4.6"),
       makeModel("claude-opus-4.6-fast"),
@@ -110,11 +273,15 @@ describe("model listing expansion", () => {
     ])
     const ids = models.map((model) => model.id)
 
+    expect(ids).toContain("gpt-5.4")
     expect(ids).toContain("gpt-5.3-codex")
-    for (const level of MODEL_LEVEL_VARIANTS["gpt-5.3-codex"]) {
+    for (const level of getModelLevelsForModel("gpt-5.4") ?? []) {
+      expect(ids).toContain(`gpt-5.4(${level})`)
+    }
+    for (const level of getModelLevelsForModel("gpt-5.3-codex") ?? []) {
       expect(ids).toContain(`gpt-5.3-codex(${level})`)
     }
-    for (const level of MODEL_LEVEL_VARIANTS["claude-opus-4.6"]) {
+    for (const level of getModelLevelsForModel("claude-opus-4.6") ?? []) {
       expect(ids).toContain(`claude-opus-4.6(${level})`)
       expect(ids).toContain(`claude-opus-4.6-fast(${level})`)
       expect(ids).toContain(`claude-sonnet-4.6(${level})`)
@@ -140,5 +307,33 @@ function makeModel(id: string): Model {
       tokenizer: "test",
       type: "chat",
     },
+  }
+}
+
+async function collectStreamChunks(
+  stream: AsyncIterable<{ data?: string | Promise<string> }>,
+): Promise<Array<ChatCompletionChunk>> {
+  const chunks: Array<ChatCompletionChunk> = []
+  for await (const event of stream) {
+    const data = await event.data
+    if (data === "[DONE]") {
+      continue
+    }
+    chunks.push(JSON.parse(data ?? "{}") as ChatCompletionChunk)
+  }
+  return chunks
+}
+
+async function* asResponseStream(events: Array<Record<string, unknown>>) {
+  for (const event of events) {
+    await Promise.resolve()
+    yield {
+      data: JSON.stringify(event),
+    }
+  }
+
+  await Promise.resolve()
+  yield {
+    data: "[DONE]",
   }
 }

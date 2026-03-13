@@ -5,8 +5,8 @@ import { copilotHeaders, copilotBaseUrl } from "~/lib/api-config"
 import { HTTPError } from "~/lib/error"
 import {
   isClaudeThinkingModel,
-  isCodexResponsesModel,
   parseModelNameWithLevel,
+  supportsGptReasoningEffort,
   type ModelLevel,
 } from "~/lib/model-level"
 import { state } from "~/lib/state"
@@ -67,7 +67,7 @@ export const normalizeChatCompletionsPayloadModel = (
     model: baseModel,
   }
 
-  if (isCodexResponsesModel(baseModel)) {
+  if (supportsGptReasoningEffort(baseModel)) {
     nextPayload.reasoning_effort = level
     return nextPayload
   }
