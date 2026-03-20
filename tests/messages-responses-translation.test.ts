@@ -126,7 +126,9 @@ describe("Anthropic messages Responses response translation", () => {
     ])
     expect(translated.stop_reason).toBe("end_turn")
   })
+})
 
+describe("Anthropic messages Responses stream translation", () => {
   test("streams reasoning summary and signature as anthropic thinking deltas", () => {
     const state = createResponsesStreamState()
     const events = [
@@ -219,6 +221,49 @@ describe("Anthropic messages Responses response translation", () => {
     })
     expect(events.at(-1)).toEqual({
       type: "message_stop",
+    })
+  })
+
+  test("does not inject placeholder thinking text when a signed block reopens", () => {
+    const state = createResponsesStreamState()
+    const events = [
+      {
+        type: "response.reasoning_summary_text.delta",
+        output_index: 0,
+        delta: "Real reasoning text.",
+      },
+      {
+        type: "response.output_text.delta",
+        output_index: 1,
+        content_index: 0,
+        delta: "Visible answer.",
+      },
+      {
+        type: "response.output_item.done",
+        output_index: 0,
+        item: {
+          type: "reasoning",
+          id: "rs_789",
+          encrypted_content: "opaque-signature",
+        },
+      },
+    ].flatMap((event) => translateResponsesStreamEvent(event, state))
+
+    const placeholderEvents = events.filter(
+      (event) =>
+        event.type === "content_block_delta"
+        && event.delta.type === "thinking_delta"
+        && event.delta.thinking === THINKING_TEXT,
+    )
+
+    expect(placeholderEvents).toHaveLength(0)
+    expect(events.at(-1)).toEqual({
+      type: "content_block_delta",
+      index: 0,
+      delta: {
+        type: "signature_delta",
+        signature: "opaque-signature@rs_789",
+      },
     })
   })
 

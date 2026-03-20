@@ -411,7 +411,6 @@ function closeOpenBlock(
     type: "content_block_stop",
     index: state.openBlockIndex,
   })
-  state.blockHasDelta.delete(state.openBlockIndex)
   state.openBlockKey = undefined
   state.openBlockIndex = undefined
 }

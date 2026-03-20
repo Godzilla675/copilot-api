@@ -216,7 +216,9 @@ function mapUserContent(
   })
 }
 
-function translateThinkingBlock(block: AnthropicThinkingBlock) {
+function translateThinkingBlock(
+  block: AnthropicThinkingBlock & { signature: string },
+) {
   const { encryptedContent, id } = parseThinkingSignature(block.signature)
   return {
     type: "reasoning" as const,
