@@ -34,6 +34,13 @@ import {
 } from "./responses-translation"
 import { translateChunkToAnthropicEvents } from "./stream-translation"
 
+const DEBUG_LOG_LENGTH = 400
+
+type ResponsesStreamEvent = {
+  type?: string
+  [key: string]: unknown
+}
+
 export async function handleCompletion(c: Context) {
   await checkRateLimit(state)
 
@@ -54,7 +61,7 @@ export async function handleCompletion(c: Context) {
     const responsesPayload = translateAnthropicToResponses(anthropicPayload)
     consola.debug(
       "Translated Responses payload:",
-      JSON.stringify(responsesPayload),
+      stringifyResponsesDebug(responsesPayload),
     )
 
     const response = await createResponses(responsesPayload)
@@ -62,12 +69,12 @@ export async function handleCompletion(c: Context) {
     if (isNonStreamingResponse(response)) {
       consola.debug(
         "Non-streaming response from Responses API:",
-        JSON.stringify(response).slice(-400),
+        stringifyResponsesDebug(response),
       )
       const anthropicResponse = translateResponsesToAnthropic(response)
       consola.debug(
         "Translated Anthropic response:",
-        JSON.stringify(anthropicResponse),
+        stringifyResponsesDebug(anthropicResponse),
       )
       return c.json(anthropicResponse)
     }
@@ -77,21 +84,22 @@ export async function handleCompletion(c: Context) {
       const streamState = createResponsesStreamState()
 
       for await (const rawEvent of response) {
-        consola.debug("Responses raw stream event:", JSON.stringify(rawEvent))
         if (!rawEvent.data || rawEvent.data === "[DONE]") {
           continue
         }
 
-        const events = translateResponsesStreamEvent(
-          JSON.parse(rawEvent.data) as {
-            type?: string
-            [key: string]: unknown
-          },
-          streamState,
+        const parsedEvent = JSON.parse(rawEvent.data) as ResponsesStreamEvent
+        consola.debug(
+          "Responses raw stream event:",
+          stringifyResponsesDebug(parsedEvent),
         )
+        const events = translateResponsesStreamEvent(parsedEvent, streamState)
 
         for (const event of events) {
-          consola.debug("Translated Anthropic event:", JSON.stringify(event))
+          consola.debug(
+            "Translated Anthropic event:",
+            stringifyResponsesDebug(event),
+          )
           await stream.writeSSE({
             event: event.type,
             data: JSON.stringify(event),
@@ -167,4 +175,42 @@ function shouldUseResponsesApi(payload: AnthropicMessagesPayload): boolean {
         && message.content.some((block) => block.type === "thinking"),
     )
   )
+}
+
+function stringifyResponsesDebug(value: unknown): string {
+  const serialized = JSON.stringify(
+    value,
+    (key: string, nestedValue: unknown): unknown => {
+      if (
+        key === "encrypted_content"
+        || key === "signature"
+        || key === "thinking_signature"
+      ) {
+        return "[REDACTED]"
+      }
+
+      if (
+        key === "image_url"
+        && typeof nestedValue === "string"
+        && nestedValue.startsWith("data:")
+      ) {
+        return "[REDACTED_DATA_URL]"
+      }
+
+      if (
+        typeof nestedValue === "string"
+        && nestedValue.length > DEBUG_LOG_LENGTH
+      ) {
+        return `${nestedValue.slice(0, DEBUG_LOG_LENGTH)}…`
+      }
+
+      return nestedValue
+    },
+  )
+
+  if (serialized.length <= DEBUG_LOG_LENGTH) {
+    return serialized
+  }
+
+  return `${serialized.slice(0, DEBUG_LOG_LENGTH)}…`
 }

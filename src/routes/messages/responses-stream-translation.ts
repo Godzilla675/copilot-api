@@ -9,16 +9,21 @@ export interface ResponsesStreamState {
   nextContentBlockIndex: number
   openBlockKey?: string
   openBlockIndex?: number
-  blockIndexByKey: Map<string, number>
-  blockHasDelta: Set<number>
+  blockHasDelta: Set<string>
+  toolBlockByKey: Map<string, ToolBlockState>
+}
+
+interface ToolBlockState {
+  id: string
+  name: string
 }
 
 export function createResponsesStreamState(): ResponsesStreamState {
   return {
     messageStartSent: false,
     nextContentBlockIndex: 0,
-    blockIndexByKey: new Map(),
     blockHasDelta: new Set(),
+    toolBlockByKey: new Map(),
   }
 }
 
@@ -106,9 +111,10 @@ function handleThinkingDelta(
   }
 
   const events: Array<AnthropicStreamEventData> = []
+  const key = getThinkingKey(parsedEvent.output_index)
   const blockIndex = openBlock({
     state,
-    key: `thinking:${parsedEvent.output_index}`,
+    key,
     contentBlock: {
       type: "thinking",
       thinking: "",
@@ -124,7 +130,7 @@ function handleThinkingDelta(
       thinking: parsedEvent.delta,
     },
   })
-  state.blockHasDelta.add(blockIndex)
+  state.blockHasDelta.add(key)
   return events
 }
 
@@ -147,9 +153,10 @@ function handleOutputItemDone(
   }
 
   const events: Array<AnthropicStreamEventData> = []
+  const key = getThinkingKey(parsedEvent.output_index)
   const blockIndex = openBlock({
     state,
-    key: `thinking:${parsedEvent.output_index}`,
+    key,
     contentBlock: {
       type: "thinking",
       thinking: "",
@@ -157,7 +164,7 @@ function handleOutputItemDone(
     events,
   })
 
-  if (!state.blockHasDelta.has(blockIndex)) {
+  if (!state.blockHasDelta.has(key)) {
     events.push({
       type: "content_block_delta",
       index: blockIndex,
@@ -179,7 +186,7 @@ function handleOutputItemDone(
         : parsedEvent.item.encrypted_content,
     },
   })
-  state.blockHasDelta.add(blockIndex)
+  state.blockHasDelta.add(key)
   return events
 }
 
@@ -200,9 +207,10 @@ function handleTextDelta(
   }
 
   const events: Array<AnthropicStreamEventData> = []
+  const key = getTextKey(parsedEvent.output_index, parsedEvent.content_index)
   const blockIndex = openBlock({
     state,
-    key: `text:${parsedEvent.output_index}:${parsedEvent.content_index}`,
+    key,
     contentBlock: { type: "text", text: "" },
     events,
   })
@@ -215,7 +223,7 @@ function handleTextDelta(
       text: parsedEvent.delta,
     },
   })
-  state.blockHasDelta.add(blockIndex)
+  state.blockHasDelta.add(key)
   return events
 }
 
@@ -237,9 +245,14 @@ function handleToolAdded(
   }
 
   const events: Array<AnthropicStreamEventData> = []
+  const key = getToolKey(parsedEvent.output_index)
+  state.toolBlockByKey.set(key, {
+    id: parsedEvent.item.call_id,
+    name: parsedEvent.item.name,
+  })
   openBlock({
     state,
-    key: `tool:${parsedEvent.output_index}`,
+    key,
     contentBlock: {
       type: "tool_use",
       id: parsedEvent.item.call_id,
@@ -265,23 +278,36 @@ function handleToolArgumentsDelta(
     return []
   }
 
-  const blockIndex = state.blockIndexByKey.get(
-    `tool:${parsedEvent.output_index}`,
-  )
-  if (blockIndex === undefined) {
+  const key = getToolKey(parsedEvent.output_index)
+  const toolBlock = state.toolBlockByKey.get(key)
+  if (!toolBlock) {
     return []
   }
 
-  return [
-    {
-      type: "content_block_delta",
-      index: blockIndex,
-      delta: {
-        type: "input_json_delta",
-        partial_json: parsedEvent.delta,
-      },
+  const events: Array<AnthropicStreamEventData> = []
+  const blockIndex = openBlock({
+    state,
+    key,
+    contentBlock: {
+      type: "tool_use",
+      id: toolBlock.id,
+      name: toolBlock.name,
+      input: {},
     },
-  ]
+    events,
+  })
+
+  events.push({
+    type: "content_block_delta",
+    index: blockIndex,
+    delta: {
+      type: "input_json_delta",
+      partial_json: parsedEvent.delta,
+    },
+  })
+  state.blockHasDelta.add(key)
+
+  return events
 }
 
 function handleToolArgumentsDone(
@@ -298,24 +324,35 @@ function handleToolArgumentsDone(
     return []
   }
 
-  const blockIndex = state.blockIndexByKey.get(
-    `tool:${parsedEvent.output_index}`,
-  )
-  if (blockIndex === undefined || state.blockHasDelta.has(blockIndex)) {
+  const key = getToolKey(parsedEvent.output_index)
+  const toolBlock = state.toolBlockByKey.get(key)
+  if (!toolBlock || state.blockHasDelta.has(key)) {
     return []
   }
 
-  state.blockHasDelta.add(blockIndex)
-  return [
-    {
-      type: "content_block_delta",
-      index: blockIndex,
-      delta: {
-        type: "input_json_delta",
-        partial_json: parsedEvent.arguments,
-      },
+  const events: Array<AnthropicStreamEventData> = []
+  const blockIndex = openBlock({
+    state,
+    key,
+    contentBlock: {
+      type: "tool_use",
+      id: toolBlock.id,
+      name: toolBlock.name,
+      input: {},
     },
-  ]
+    events,
+  })
+
+  state.blockHasDelta.add(key)
+  events.push({
+    type: "content_block_delta",
+    index: blockIndex,
+    delta: {
+      type: "input_json_delta",
+      partial_json: parsedEvent.arguments,
+    },
+  })
+  return events
 }
 
 function handleCompleted(
@@ -377,17 +414,12 @@ function openBlock(params: {
   events: Array<AnthropicStreamEventData>
 }): number {
   const { state, key, contentBlock, events } = params
-  let blockIndex = state.blockIndexByKey.get(key)
-  if (blockIndex === undefined) {
-    blockIndex = state.nextContentBlockIndex
-    state.nextContentBlockIndex += 1
-    state.blockIndexByKey.set(key, blockIndex)
+  if (state.openBlockKey === key && state.openBlockIndex !== undefined) {
+    return state.openBlockIndex
   }
 
-  if (state.openBlockKey === key) {
-    return blockIndex
-  }
-
+  const blockIndex = state.nextContentBlockIndex
+  state.nextContentBlockIndex += 1
   closeOpenBlock(state, events)
   events.push({
     type: "content_block_start",
@@ -413,6 +445,18 @@ function closeOpenBlock(
   })
   state.openBlockKey = undefined
   state.openBlockIndex = undefined
+}
+
+function getThinkingKey(outputIndex: number): string {
+  return `thinking:${outputIndex}`
+}
+
+function getTextKey(outputIndex: number, contentIndex: number): string {
+  return `text:${outputIndex}:${contentIndex}`
+}
+
+function getToolKey(outputIndex: number): string {
+  return `tool:${outputIndex}`
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

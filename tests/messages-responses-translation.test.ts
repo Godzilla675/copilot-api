@@ -73,6 +73,20 @@ describe("Anthropic messages Responses request translation", () => {
       content: "What about the next step?",
     })
   })
+
+  test("normalizes unsupported Claude subagent models on responses path", () => {
+    const translated = translateAnthropicToResponses({
+      model: "claude-sonnet-4-20250110",
+      messages: [{ role: "user", content: "hi" }],
+      max_tokens: 64,
+      thinking: {
+        type: "enabled",
+        budget_tokens: 1024,
+      },
+    })
+
+    expect(translated.model).toBe("claude-sonnet-4")
+  })
 })
 
 describe("Anthropic messages Responses response translation", () => {
@@ -128,7 +142,7 @@ describe("Anthropic messages Responses response translation", () => {
   })
 })
 
-describe("Anthropic messages Responses stream translation", () => {
+describe("Anthropic messages Responses reasoning stream translation", () => {
   test("streams reasoning summary and signature as anthropic thinking deltas", () => {
     const state = createResponsesStreamState()
     const events = [
@@ -257,16 +271,127 @@ describe("Anthropic messages Responses stream translation", () => {
     )
 
     expect(placeholderEvents).toHaveLength(0)
+    expect(events.at(-2)).toEqual({
+      type: "content_block_start",
+      index: 2,
+      content_block: {
+        type: "thinking",
+        thinking: "",
+      },
+    })
     expect(events.at(-1)).toEqual({
       type: "content_block_delta",
-      index: 0,
+      index: 2,
       delta: {
         type: "signature_delta",
         signature: "opaque-signature@rs_789",
       },
     })
   })
+})
 
+describe("Anthropic messages Responses tool stream translation", () => {
+  test("reopens tool blocks with a new index and avoids duplicating done args", () => {
+    const state = createResponsesStreamState()
+    const events = [
+      {
+        type: "response.output_item.added",
+        output_index: 0,
+        item: {
+          type: "function_call",
+          call_id: "call_123",
+          name: "get_weather",
+        },
+      },
+      {
+        type: "response.function_call_arguments.delta",
+        output_index: 0,
+        delta: '{"city":"Bos',
+      },
+      {
+        type: "response.output_text.delta",
+        output_index: 1,
+        content_index: 0,
+        delta: "Working on it.",
+      },
+      {
+        type: "response.function_call_arguments.delta",
+        output_index: 0,
+        delta: 'ton"}',
+      },
+      {
+        type: "response.function_call_arguments.done",
+        output_index: 0,
+        arguments: '{"city":"Boston"}',
+      },
+    ].flatMap((event) => translateResponsesStreamEvent(event, state))
+
+    expect(events).toEqual([
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: {
+          type: "tool_use",
+          id: "call_123",
+          name: "get_weather",
+          input: {},
+        },
+      },
+      {
+        type: "content_block_delta",
+        index: 0,
+        delta: {
+          type: "input_json_delta",
+          partial_json: '{"city":"Bos',
+        },
+      },
+      {
+        type: "content_block_stop",
+        index: 0,
+      },
+      {
+        type: "content_block_start",
+        index: 1,
+        content_block: {
+          type: "text",
+          text: "",
+        },
+      },
+      {
+        type: "content_block_delta",
+        index: 1,
+        delta: {
+          type: "text_delta",
+          text: "Working on it.",
+        },
+      },
+      {
+        type: "content_block_stop",
+        index: 1,
+      },
+      {
+        type: "content_block_start",
+        index: 2,
+        content_block: {
+          type: "tool_use",
+          id: "call_123",
+          name: "get_weather",
+          input: {},
+        },
+      },
+      {
+        type: "content_block_delta",
+        index: 2,
+        delta: {
+          type: "input_json_delta",
+          partial_json: 'ton"}',
+        },
+      },
+    ])
+  })
+})
+
+describe("Anthropic messages Responses placeholder translation", () => {
   test("uses placeholder thinking text when reasoning summary is absent", () => {
     const translated = translateResponsesToAnthropic({
       id: "resp_456",

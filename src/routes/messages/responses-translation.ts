@@ -22,6 +22,8 @@ import type {
   AnthropicUserMessage,
 } from "./anthropic-types"
 
+import { translateModelName } from "./non-stream-translation"
+
 export const THINKING_TEXT = "Thinking..."
 
 type InputItem = ResponseInputItem
@@ -35,7 +37,7 @@ export function translateAnthropicToResponses(
   ]
 
   return {
-    model: payload.model,
+    model: translateModelName(payload.model),
     input,
     stream: payload.stream,
     temperature: payload.temperature,
