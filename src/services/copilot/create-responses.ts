@@ -34,7 +34,7 @@ export const createResponses = async (payload: ResponsesPayload) => {
 
 export interface ResponsesPayload {
   model: string
-  input: string | Array<ResponseInputMessage>
+  input: string | Array<ResponseInputItem>
   stream?: boolean | null
   temperature?: number | null
   top_p?: number | null
@@ -46,8 +46,12 @@ export interface ResponsesPayload {
   reasoning_effort?: ModelLevel | null
   reasoning?: {
     effort?: ModelLevel
+    summary?: string
   } | null
+  include?: Array<string> | null
 }
+
+export type ResponseInputItem = ResponseInputMessage | ResponseInputReasoning
 
 export interface ResponseInputMessage {
   role: "user" | "assistant" | "system" | "tool" | "developer"
@@ -55,6 +59,16 @@ export interface ResponseInputMessage {
   name?: string
   tool_call_id?: string
   tool_calls?: Array<ResponseInputToolCall>
+}
+
+export interface ResponseInputReasoning {
+  type: "reasoning"
+  encrypted_content: string
+  id?: string
+  summary?: Array<{
+    type: "summary_text"
+    text: string
+  }>
 }
 
 export interface ResponseInputContentPart {
@@ -84,10 +98,16 @@ export interface ResponsesApiResponse {
     input_tokens?: number
     output_tokens?: number
     total_tokens?: number
+    input_tokens_details?: {
+      cached_tokens?: number
+    }
   }
 }
 
-export type ResponsesOutputItem = ResponsesOutputMessage | ResponsesFunctionCall
+export type ResponsesOutputItem =
+  | ResponsesOutputMessage
+  | ResponsesFunctionCall
+  | ResponsesReasoningItem
 
 export interface ResponsesOutputMessage {
   type: "message"
@@ -123,6 +143,16 @@ export interface ResponsesFunctionCall {
   status?: string
 }
 
+export interface ResponsesReasoningItem {
+  type: "reasoning"
+  id?: string
+  encrypted_content?: string
+  summary?: Array<{
+    type: string
+    text?: string
+  }>
+}
+
 function hasVisionInput(input: ResponsesPayload["input"]): boolean {
   if (!Array.isArray(input)) {
     return false
@@ -130,7 +160,8 @@ function hasVisionInput(input: ResponsesPayload["input"]): boolean {
 
   return input.some(
     (message) =>
-      Array.isArray(message.content)
+      isResponseInputMessage(message)
+      && Array.isArray(message.content)
       && message.content.some((part) => part.type === "input_image"),
   )
 }
@@ -140,5 +171,15 @@ function hasAgentInput(input: ResponsesPayload["input"]): boolean {
     return false
   }
 
-  return input.some((message) => ["assistant", "tool"].includes(message.role))
+  return input.some(
+    (message) =>
+      isResponseInputMessage(message)
+      && ["assistant", "tool"].includes(message.role),
+  )
+}
+
+function isResponseInputMessage(
+  value: ResponseInputItem,
+): value is ResponseInputMessage {
+  return "role" in value
 }
