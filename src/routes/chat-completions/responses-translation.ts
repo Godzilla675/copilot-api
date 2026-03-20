@@ -432,7 +432,11 @@ function extractToolCalls(
       continue
     }
 
-    if (typeof item.content === "string" || !Array.isArray(item.content)) {
+    if (
+      item.type !== "message"
+      || typeof item.content === "string"
+      || !Array.isArray(item.content)
+    ) {
       continue
     }
 
